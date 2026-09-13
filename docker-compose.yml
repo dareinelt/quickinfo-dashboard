@@ -1,0 +1,87 @@
+services:
+  db:
+    image: mariadb:11
+    container_name: qiboard-db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-change-me-root}
+      MARIADB_DATABASE: ${DB_NAME:-qiboard}
+      MARIADB_USER: ${DB_USER:-qiboard}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-change-me-db}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./docker/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  php:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: qiboard-php
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-qiboard}
+      DB_USER: ${DB_USER:-qiboard}
+      DB_PASSWORD: ${DB_PASSWORD:-change-me-db}
+      APP_SECRET: ${APP_SECRET:-change-me-app-secret-please}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      SESSION_LIFETIME: ${SESSION_LIFETIME:-43200}
+      COLLECTOR_INTERVAL: ${COLLECTOR_INTERVAL:-60}
+      COLLECTOR_TIMEOUT: ${COLLECTOR_TIMEOUT:-10}
+      RETENTION_RAW_DAYS: ${RETENTION_RAW_DAYS:-4}
+      RETENTION_AGG_DAYS: ${RETENTION_AGG_DAYS:-30}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - ./app:/var/www/app:ro
+      - php-sessions:/var/lib/php/sessions
+
+  collector:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: qiboard-collector
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-qiboard}
+      DB_USER: ${DB_USER:-qiboard}
+      DB_PASSWORD: ${DB_PASSWORD:-change-me-db}
+      APP_SECRET: ${APP_SECRET:-change-me-app-secret-please}
+      COLLECTOR_INTERVAL: ${COLLECTOR_INTERVAL:-60}
+      COLLECTOR_TIMEOUT: ${COLLECTOR_TIMEOUT:-10}
+      RETENTION_RAW_DAYS: ${RETENTION_RAW_DAYS:-4}
+      RETENTION_AGG_DAYS: ${RETENTION_AGG_DAYS:-30}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - ./app:/var/www/app:ro
+    command: ["php", "/var/www/app/bin/collector.php", "--daemon"]
+
+  web:
+    image: nginx:1.27-alpine
+    container_name: qiboard-web
+    restart: unless-stopped
+    depends_on:
+      - php
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./app/public:/var/www/app/public:ro
+
+volumes:
+  db-data:
+  php-sessions:
