@@ -319,6 +319,21 @@ button, input, select { font: inherit; color: inherit; }
 .host-meta { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-dim); }
 .host-meta b { color: var(--text); font-weight: 600; }
 
+/* ---------- Container-Ordner ---------- */
+.container-groups { display: flex; flex-direction: column; gap: 16px; }
+.folder { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+.folder.drop-target { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 8px 30px rgba(79, 140, 255, .12); }
+.folder-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--bg-elev); }
+.folder-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.folder-title .ico { color: var(--accent); }
+.folder-title h2 { margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.folder-head .actions { margin-left: auto; display: flex; gap: 6px; }
+.folder-empty { padding: 22px 16px; text-align: center; color: var(--text-dim); font-size: 13px; }
+.draggable-row.dragging { opacity: .4; }
+.drag-grip { display: inline-block; margin-right: 8px; color: var(--text-muted); cursor: grab; font-size: 13px; user-select: none; }
+.drag-grip:hover { color: var(--accent); }
+
 /* ---------- Modal ---------- */
 .modal-bg { position: fixed; inset: 0; z-index: 50; background: rgba(4, 6, 10, .7); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadein .15s; }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }

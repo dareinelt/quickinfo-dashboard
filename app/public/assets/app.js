@@ -53,6 +53,7 @@
     play: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3l8 5-8 5z"/></svg>',
     stop: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="8" height="8" rx="1"/></svg>',
     restart: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>',
+    folder: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M1.8 4.5A1.2 1.2 0 0 1 3 3.3h3l1.5 1.7h5.3a1.2 1.2 0 0 1 1.2 1.2v6.1a1.2 1.2 0 0 1-1.2 1.2H3a1.2 1.2 0 0 1-1.2-1.2z"/></svg>',
   };
   function icon(name) { const s = h('span', { class: 'ico', html: ICONS[name] }); s.style.display = 'inline-flex'; return s; }
 
@@ -755,21 +756,94 @@
   async function renderContainers() {
     const token = state.renderToken;
     const totalsEl = h('div', { class: 'totals' });
-    const tableEl = h('div', { class: 'card' });
+    const listEl = h('div', { class: 'container-groups' });
     const refreshInfo = h('span', { class: 'refresh-info' }, h('i', { class: 'dot' }), 'lädt …');
     const content = h('div', null,
       h('div', { class: 'page-head' },
-        h('div', null, h('h1', null, 'Container'), h('div', { class: 'sub' }, 'Alle Docker-Container über alle Hosts hinweg')),
-        h('div', { class: 'actions' }, refreshInfo)
+        h('div', null, h('h1', null, 'Container'), h('div', { class: 'sub' }, 'Alle Docker-Container über alle Hosts hinweg – per Drag & Drop in Ordner sortierbar')),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn primary', onClick: () => openGroupModal(null, load) }, icon('plus'), 'Neuer Ordner'),
+          refreshInfo)
       ),
-      totalsEl, tableEl
+      totalsEl, listEl
     );
     mount(shell(content, 'containers'));
+
+    function containerRow(c) {
+      const si = containerStateInfo(c.state);
+      const host = c.host || {};
+      return h('tr', {
+        class: 'clickable draggable-row',
+        draggable: true,
+        onClick: (e) => { if (!e.target.closest('button, a')) navigate('#/container/' + c.node_id + '/' + c.container_id); },
+        ondragstart: (e) => {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', JSON.stringify({
+            node_id: c.node_id, container_id: c.container_id, name: c.name,
+            group_id: c.group_id != null ? c.group_id : null,
+          }));
+          e.currentTarget.classList.add('dragging');
+        },
+        ondragend: (e) => {
+          e.currentTarget.classList.remove('dragging');
+          document.querySelectorAll('.folder.drop-target').forEach(el => el.classList.remove('drop-target'));
+        },
+      },
+        h('td', null, h('span', { class: 'drag-grip', title: 'Ziehen, um Container einem Ordner zuzuordnen' }, '⠿'), h('b', null, c.name)),
+        h('td', { class: 'mono dim' }, c.image || '–'),
+        h('td', null, h('span', { class: 'status ' + si.cls }, h('i', { class: 'dot' }), si.label), c.status ? h('span', { class: 'muted', style: { fontSize: '11.5px', marginLeft: '6px' } }, c.status) : null),
+        h('td', null, h('a', { href: '#/node/' + host.id, class: 'dim' }, host.name || host.hostname || ('Host ' + host.id))),
+        h('td', { class: 'mono dim' }, formatPorts(c.ports)),
+        h('td', null, h('div', { class: 'actions' }, h('button', { class: 'btn sm', title: 'Details', onClick: () => navigate('#/container/' + c.node_id + '/' + c.container_id) }, 'Details')))
+      );
+    }
+
+    function folderSection(group, items, isUnsorted) {
+      const gid = group ? group.id : null;
+      const name = isUnsorted ? 'Nicht zugeordnet' : group.name;
+      const head = h('header', { class: 'folder-head' },
+        h('div', { class: 'folder-title' }, icon('folder'), h('h2', null, name), h('span', { class: 'folder-count' }, items.length + ' Container')),
+        group ? h('div', { class: 'actions' },
+          h('button', { class: 'btn sm', title: 'Ordner umbenennen', onClick: () => openGroupModal(group, load) }, icon('edit')),
+          h('button', { class: 'btn sm danger', title: 'Ordner löschen', onClick: () => confirmDeleteGroup(group, load) }, icon('trash'))
+        ) : null
+      );
+      const body = items.length === 0
+        ? h('div', { class: 'folder-empty' }, isUnsorted ? 'Alle Container sind Ordnern zugeordnet.' : 'Container hierher ziehen, um sie diesem Ordner zuzuordnen.')
+        : h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+            h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Image'), h('th', null, 'Status'), h('th', null, 'Host'), h('th', null, 'Ports'), h('th', { class: 'right' }, 'Aktionen'))),
+            h('tbody', null, items.map(containerRow))
+          ));
+      return h('section', {
+        class: 'folder', 'data-group-id': gid === null ? '' : String(gid),
+        ondragover: (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          e.currentTarget.classList.add('drop-target');
+        },
+        ondragleave: (e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop-target');
+        },
+        ondrop: async (e) => {
+          e.preventDefault();
+          e.currentTarget.classList.remove('drop-target');
+          let data;
+          try { data = JSON.parse(e.dataTransfer.getData('text/plain')); } catch (err) { return; }
+          if (!data || data.node_id == null || data.container_id == null) return;
+          if (data.group_id === gid) return;
+          try {
+            await api('POST', 'containers/' + data.node_id + '/' + data.container_id + '/group', { group_id: gid });
+            toast('Container „' + data.name + '“ ' + (gid === null ? 'aus Ordnern entfernt' : 'nach „' + name + '“ verschoben'), 'ok');
+            await load();
+          } catch (err) { toast(err.message, 'crit'); }
+        },
+      }, head, body);
+    }
 
     async function load() {
       let d;
       try { d = await api('GET', 'containers'); }
-      catch (e) { if (e.status !== 401) tableEl.replaceChildren(h('p', { class: 'crit' }, e.message)); return; }
+      catch (e) { if (e.status !== 401) listEl.replaceChildren(h('p', { class: 'crit' }, e.message)); return; }
       const t = d.totals || {};
       totalsEl.replaceChildren(
         h('div', { class: 'total' }, h('span', { class: 'label' }, 'Docker-Hosts'), h('span', { class: 'value num' }, t.hosts)),
@@ -778,31 +852,83 @@
         h('div', { class: 'total' }, h('span', { class: 'label' }, 'Gestoppt'), h('span', { class: 'value num ' + (t.stopped > 0 ? 'warn' : '') }, t.stopped))
       );
       if (!d.containers.length) {
-        tableEl.replaceChildren(h('div', { class: 'empty' },
+        listEl.replaceChildren(h('div', { class: 'empty' },
           h('h3', null, 'Keine Container gefunden'),
           h('p', null, 'Auf keiner verbundenen quickinfo-Instanz ist das Docker-Modul aktiv, oder es laufen keine Container. Aktiviere Docker in quickinfo (Einstellungen → Docker) und koppele den Host als Server.')));
         return;
       }
-      tableEl.replaceChildren(h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
-        h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Image'), h('th', null, 'Status'), h('th', null, 'Host'), h('th', null, 'Ports'), h('th', { class: 'right' }, 'Aktionen'))),
-        h('tbody', null, d.containers.map(c => {
-          const si = containerStateInfo(c.state);
-          const host = c.host || {};
-          return h('tr', { class: 'clickable', onClick: (e) => { if (!e.target.closest('button, a')) navigate('#/container/' + c.node_id + '/' + c.container_id); } },
-            h('td', null, h('b', null, c.name)),
-            h('td', { class: 'mono dim' }, c.image || '–'),
-            h('td', null, h('span', { class: 'status ' + si.cls }, h('i', { class: 'dot' }), si.label), c.status ? h('span', { class: 'muted', style: { fontSize: '11.5px', marginLeft: '6px' } }, c.status) : null),
-            h('td', null, h('a', { href: '#/node/' + host.id, class: 'dim' }, host.name || host.hostname || ('Host ' + host.id))),
-            h('td', { class: 'mono dim' }, formatPorts(c.ports)),
-            h('td', null, h('div', { class: 'actions' }, h('button', { class: 'btn sm', title: 'Details', onClick: () => navigate('#/container/' + c.node_id + '/' + c.container_id) }, 'Details')))
-          );
-        }))
-      )));
+      const byGroup = new Map();
+      for (const g of (d.groups || [])) byGroup.set(g.id, []);
+      const unsorted = [];
+      for (const c of d.containers) {
+        if (c.group_id != null && byGroup.has(c.group_id)) byGroup.get(c.group_id).push(c);
+        else unsorted.push(c);
+      }
+      const sections = (d.groups || []).map(g => folderSection(g, byGroup.get(g.id) || [], false));
+      sections.push(folderSection(null, unsorted, true));
+      listEl.replaceChildren(...sections);
       refreshInfo.className = 'refresh-info';
       refreshInfo.replaceChildren(h('i', { class: 'dot' }), 'Aktualisiert ' + new Date().toLocaleTimeString('de-DE'));
     }
     await load();
     startRefresh(load, token);
+  }
+
+  function openGroupModal(group, done) {
+    const isEdit = !!group;
+    const f = { name: h('input', { class: 'input', type: 'text', maxlength: 128, placeholder: 'z.B. Produktion, Staging, Datenbanken', value: group ? group.name : '' }) };
+    const err = h('div', { class: 'error hidden' });
+    const saveBtn = h('button', { class: 'btn primary' }, icon('check'), isEdit ? 'Speichern' : 'Anlegen');
+
+    function showErr(msg) { err.textContent = msg; err.classList.toggle('hidden', !msg); f.name.classList.toggle('invalid', !!msg); }
+
+    const bg = h('div', { class: 'modal-bg', onClick: (e) => { if (e.target === bg) bg.remove(); } },
+      h('div', { class: 'modal', role: 'dialog' },
+        h('header', null, h('h2', null, isEdit ? 'Ordner umbenennen' : 'Neuer Ordner'), h('button', { class: 'btn ghost sm close', onClick: () => bg.remove() }, icon('x'))),
+        h('form', { class: 'body', onSubmit: (e) => { e.preventDefault(); saveBtn.click(); } },
+          h('div', { class: 'field' }, h('label', null, 'Ordnername'), f.name, err),
+          h('button', { type: 'submit', class: 'hidden' })
+        ),
+        h('footer', null,
+          h('button', { class: 'btn', onClick: () => bg.remove() }, 'Abbrechen'),
+          saveBtn
+        )));
+    saveBtn.addEventListener('click', async () => {
+      const name = f.name.value.trim();
+      if (!name) { showErr('Bitte einen Namen eingeben.'); return; }
+      saveBtn.disabled = true; saveBtn.replaceChildren(h('span', { class: 'spinner' }), isEdit ? 'Speichern …' : 'Anlegen …');
+      try {
+        showErr('');
+        if (isEdit) await api('PUT', 'container-groups/' + group.id, { name });
+        else await api('POST', 'container-groups', { name });
+        toast(isEdit ? 'Ordner umbenannt' : 'Ordner angelegt', 'ok');
+        bg.remove(); done && done();
+      } catch (e) {
+        if (e.data && e.data.field === 'name') showErr(e.message);
+        else toast(e.message, 'crit');
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.replaceChildren(icon('check'), isEdit ? 'Speichern' : 'Anlegen');
+      }
+    });
+    document.body.appendChild(bg);
+    setTimeout(() => f.name.focus(), 0);
+  }
+
+  function confirmDeleteGroup(group, done) {
+    const bg = h('div', { class: 'modal-bg', onClick: (e) => { if (e.target === bg) bg.remove(); } },
+      h('div', { class: 'modal', role: 'dialog' },
+        h('header', null, h('h2', null, 'Ordner löschen'), h('button', { class: 'btn ghost sm close', onClick: () => bg.remove() }, icon('x'))),
+        h('div', { class: 'body' }, h('p', null, 'Soll der Ordner ', h('b', null, group.name), ' wirklich gelöscht werden? Die enthaltenen Container werden nach „Nicht zugeordnet“ verschoben.')),
+        h('footer', null,
+          h('button', { class: 'btn', onClick: () => bg.remove() }, 'Abbrechen'),
+          h('button', { class: 'btn danger', onClick: async (e) => {
+            e.currentTarget.disabled = true;
+            try { await api('DELETE', 'container-groups/' + group.id); toast('Ordner gelöscht', 'ok'); bg.remove(); done && done(); }
+            catch (err) { toast(err.message, 'crit'); e.currentTarget.disabled = false; }
+          } }, icon('trash'), 'Löschen')
+        )));
+    document.body.appendChild(bg);
   }
 
   async function renderContainerDetail(id) {

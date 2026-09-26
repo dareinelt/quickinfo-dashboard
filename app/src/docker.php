@@ -13,15 +13,16 @@ require_once __DIR__ . '/nodes.php';
  * Aggregierte Container-Liste über alle aktiven Nodes (unabhängig vom Host).
  * Jeder Container erhält eine Referenz auf seinen Host (Node).
  *
- * @return array{containers:array, hosts:array, totals:array}
+ * @return array{containers:array, hosts:array, groups:array, totals:array}
  */
 function qb_docker_containers_aggregate(): array
 {
     $rows = qb_db()->query(
         'SELECT c.*, n.name AS node_name, n.hostname AS node_hostname, n.url AS node_url, n.status AS node_status,
-                n.sort_order AS node_sort
+                n.sort_order AS node_sort, gi.group_id AS group_id
            FROM node_containers c
            JOIN nodes n ON n.id = c.node_id
+           LEFT JOIN container_group_items gi ON gi.node_id = c.node_id AND gi.container_id = c.container_id
           WHERE n.enabled = 1
           ORDER BY n.sort_order, n.name, c.name'
     )->fetchAll();
@@ -40,6 +41,7 @@ function qb_docker_containers_aggregate(): array
             'state'        => $r['state'],
             'status'       => $r['status'],
             'ports'        => $ports,
+            'group_id'     => $r['group_id'] !== null ? (int)$r['group_id'] : null,
             'updated_at'   => (int)$r['updated_at'],
             'host'         => [
                 'id'       => $nodeId,
@@ -78,6 +80,7 @@ function qb_docker_containers_aggregate(): array
     return [
         'containers' => $containers,
         'hosts'      => $hosts,
+        'groups'     => qb_container_groups_list(),
         'totals'     => [
             'hosts'      => count($hosts),
             'containers' => count($containers),
@@ -169,4 +172,105 @@ function qb_docker_container_action(int $nodeId, string $containerId, string $ac
 
     $res = $client->dockerAction($name, $action);
     return ['ok' => $res['ok'], 'error' => $res['error'], 'action' => $action];
+}
+
+/**
+ * Liefert die benutzerdefinierten Container-Ordner inkl. Anzahl zugeordneter Container.
+ * @return list<array{id:int,name:string,sort_order:int,container_count:int}>
+ */
+function qb_container_groups_list(): array
+{
+    $rows = qb_db()->query('SELECT id, name, sort_order FROM container_groups ORDER BY sort_order, name')->fetchAll();
+    return array_map(static function (array $r): array {
+        $id = (int)$r['id'];
+        return [
+            'id'              => $id,
+            'name'            => $r['name'],
+            'sort_order'      => (int)$r['sort_order'],
+            'container_count' => qb_container_group_count($id),
+        ];
+    }, $rows);
+}
+
+/** @return array{id:int,name:string,sort_order:int}|null */
+function qb_container_group_row(int $id): ?array
+{
+    $stmt = qb_db()->prepare('SELECT id, name, sort_order FROM container_groups WHERE id = ?');
+    $stmt->execute([$id]);
+    $r = $stmt->fetch();
+    return $r ? ['id' => (int)$r['id'], 'name' => $r['name'], 'sort_order' => (int)$r['sort_order']] : null;
+}
+
+function qb_container_group_count(int $id): int
+{
+    $stmt = qb_db()->prepare('SELECT COUNT(*) FROM container_group_items WHERE group_id = ?');
+    $stmt->execute([$id]);
+    return (int)$stmt->fetchColumn();
+}
+
+function qb_container_group_create(string $name): array
+{
+    $db = qb_db();
+    try {
+        $db->prepare('INSERT INTO container_groups (name, sort_order, created_at) VALUES (?, 0, ?)')
+            ->execute([$name, time()]);
+    } catch (PDOException $e) {
+        if ($e->getCode() === '23000') {
+            qb_json_error('Ein Ordner mit diesem Namen existiert bereits.', 409);
+        }
+        throw $e;
+    }
+    return ['id' => (int)$db->lastInsertId(), 'name' => $name, 'container_count' => 0];
+}
+
+function qb_container_group_rename(int $id, string $name): array
+{
+    if (qb_container_group_row($id) === null) {
+        qb_json_error('Ordner nicht gefunden.', 404);
+    }
+    try {
+        qb_db()->prepare('UPDATE container_groups SET name = ? WHERE id = ?')->execute([$name, $id]);
+    } catch (PDOException $e) {
+        if ($e->getCode() === '23000') {
+            qb_json_error('Ein Ordner mit diesem Namen existiert bereits.', 409);
+        }
+        throw $e;
+    }
+    return ['id' => $id, 'name' => $name, 'container_count' => qb_container_group_count($id)];
+}
+
+function qb_container_group_delete(int $id): void
+{
+    if (qb_container_group_row($id) === null) {
+        qb_json_error('Ordner nicht gefunden.', 404);
+    }
+    qb_db()->prepare('DELETE FROM container_groups WHERE id = ?')->execute([$id]);
+}
+
+/**
+ * Weist einen Container einem Ordner zu (group_id) oder entfernt ihn aus Ordnern (group_id = null).
+ * Die Zuordnung ist getrennt vom flüchtigen node_containers-Cache und bleibt über Polls erhalten.
+ */
+function qb_container_group_assign(int $nodeId, string $containerId, ?int $groupId): array
+{
+    $db = qb_db();
+    $stmt = $db->prepare('SELECT 1 FROM node_containers WHERE node_id = ? AND container_id = ?');
+    $stmt->execute([$nodeId, $containerId]);
+    if (!$stmt->fetchColumn()) {
+        qb_json_error('Container nicht gefunden.', 404);
+    }
+
+    if ($groupId === null) {
+        $db->prepare('DELETE FROM container_group_items WHERE node_id = ? AND container_id = ?')
+            ->execute([$nodeId, $containerId]);
+    } else {
+        if (qb_container_group_row($groupId) === null) {
+            qb_json_error('Ordner nicht gefunden.', 404);
+        }
+        $db->prepare(
+            'INSERT INTO container_group_items (node_id, container_id, group_id) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE group_id = VALUES(group_id)'
+        )->execute([$nodeId, $containerId, $groupId]);
+    }
+    return ['ok' => true, 'group_id' => $groupId];
 }

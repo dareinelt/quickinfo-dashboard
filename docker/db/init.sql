@@ -106,6 +106,29 @@ CREATE TABLE IF NOT EXISTS node_containers (
         REFERENCES nodes (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Benutzerdefinierte Ordner zur logischen Gruppierung von Containern
+CREATE TABLE IF NOT EXISTS container_groups (
+    id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name       VARCHAR(128) NOT NULL,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at INT UNSIGNED NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_container_groups_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Zuordnung Container → Ordner (getrennt vom flüchtigen node_containers-Cache)
+CREATE TABLE IF NOT EXISTS container_group_items (
+    node_id      INT UNSIGNED NOT NULL,
+    container_id VARCHAR(64)  NOT NULL,
+    group_id     INT UNSIGNED NOT NULL,
+    PRIMARY KEY (node_id, container_id),
+    KEY idx_container_group_items_group (group_id),
+    CONSTRAINT fk_container_group_items_node FOREIGN KEY (node_id)
+        REFERENCES nodes (id) ON DELETE CASCADE,
+    CONSTRAINT fk_container_group_items_group FOREIGN KEY (group_id)
+        REFERENCES container_groups (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Verlauf von Online-/Offline-Wechseln und Dienstausfällen
 CREATE TABLE IF NOT EXISTS node_events (
     id       BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
