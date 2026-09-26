@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS node_services (
         REFERENCES nodes (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Docker-Container je Node (aus /api/v1/docker/containers der jeweiligen quickinfo-Instanz)
+CREATE TABLE IF NOT EXISTS node_containers (
+    node_id       INT UNSIGNED NOT NULL,
+    container_id  VARCHAR(64)  NOT NULL,
+    name          VARCHAR(255) NOT NULL,
+    image         VARCHAR(255) NULL,
+    state         VARCHAR(32)  NULL,          -- running | exited | created | paused | …
+    status        VARCHAR(255) NULL,
+    ports         TEXT         NULL,
+    updated_at    INT UNSIGNED NOT NULL,
+    PRIMARY KEY (node_id, container_id),
+    KEY idx_node_containers_node (node_id),
+    CONSTRAINT fk_node_containers_node FOREIGN KEY (node_id)
+        REFERENCES nodes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Verlauf von Online-/Offline-Wechseln und Dienstausfällen
 CREATE TABLE IF NOT EXISTS node_events (
     id       BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

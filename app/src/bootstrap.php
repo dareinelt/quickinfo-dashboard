@@ -73,6 +73,7 @@ function qb_db(): PDO
                 PDO::ATTR_EMULATE_PREPARES   => false,
                 PDO::ATTR_TIMEOUT            => 5,
             ]);
+            qb_schema_migrate($pdo);
             return $pdo;
         } catch (PDOException $e) {
             $lastError = $e;
@@ -83,6 +84,31 @@ function qb_db(): PDO
         }
     }
     throw new RuntimeException('Datenbankverbindung fehlgeschlagen: ' . ($lastError?->getMessage() ?? 'unbekannt'));
+}
+
+/**
+ * Idempotente Schema-Migration für Bestandsinstallationen.
+ * Neue Tabellen werden ergänzt, ohne das bestehende Schema zu berühren
+ * (frische Installationen erhalten die Tabellen weiterhin über docker/db/init.sql).
+ */
+function qb_schema_migrate(PDO $db): void
+{
+    $db->exec(
+        'CREATE TABLE IF NOT EXISTS node_containers (
+            node_id       INT UNSIGNED NOT NULL,
+            container_id  VARCHAR(64)  NOT NULL,
+            name          VARCHAR(255) NOT NULL,
+            image         VARCHAR(255) NULL,
+            state         VARCHAR(32)  NULL,
+            status        VARCHAR(255) NULL,
+            ports         TEXT         NULL,
+            updated_at    INT UNSIGNED NOT NULL,
+            PRIMARY KEY (node_id, container_id),
+            KEY idx_node_containers_node (node_id),
+            CONSTRAINT fk_node_containers_node FOREIGN KEY (node_id)
+                REFERENCES nodes (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+    );
 }
 
 function qb_meta_get(string $key, ?string $default = null): ?string

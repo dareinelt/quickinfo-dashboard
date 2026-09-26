@@ -17,11 +17,16 @@ declare(strict_types=1);
  *  DELETE /api/nodes/{id}              Node löschen
  *  POST   /api/nodes/{id}/poll         Node sofort abfragen
  *  GET    /api/nodes/{id}/history      ?range=1h|3h|24h|3d|14d[&metrics=a,b]
+ *
+ *  GET    /api/containers                 Aggregierte Container aller Docker-Hosts
+ *  GET    /api/containers/{node}/{id}     Container-Detail (inkl. Host-Zuordnung, Live-Stats)
+ *  POST   /api/containers/{node}/{id}/{start|stop|restart}
  */
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/nodes.php';
 require_once __DIR__ . '/collector.php';
+require_once __DIR__ . '/docker.php';
 require_once __DIR__ . '/history.php';
 
 function qb_api_dispatch(): never
@@ -82,6 +87,17 @@ function qb_api_dispatch(): never
         case $path === 'nodes' && $method === 'GET':
             qb_require_auth();
             qb_json_response(['nodes' => qb_nodes_list()]);
+
+        case $path === 'containers' && $method === 'GET':
+            qb_require_auth();
+            qb_json_response(qb_docker_containers_aggregate());
+
+        case count($seg) === 3 && $seg[0] === 'containers' && ctype_digit($seg[1]) && $seg[2] !== '' && $method === 'GET':
+            qb_require_auth();
+            qb_json_response(qb_docker_container_detail((int)$seg[1], $seg[2]));
+
+        case count($seg) === 4 && $seg[0] === 'containers' && ctype_digit($seg[1]) && $seg[2] !== '' && $method === 'POST':
+            qb_json_response(qb_docker_container_action((int)$seg[1], $seg[2], $seg[3]));
 
         case $path === 'nodes' && $method === 'POST':
             $in = qb_request_json();

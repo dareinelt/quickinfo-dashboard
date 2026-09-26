@@ -20,6 +20,7 @@ sie lokal in MariaDB und visualisiert sie in einem Dark-Theme-Dashboard.
 | **Übersichts-Grid** | Kachel je Server: Online/Offline, Uptime, CPU, Temperatur, GPU bzw. RAM, freier Speicherplatz auf `/`, Dienststatus. Farbindikatoren Grün/Gelb/Rot bei Schwellenwerten (CPU ≥ 75/90 %, Temp ≥ 70/80 °C, Disk/RAM ≥ 80/90 %) |
 | **Detail-Ansicht** | KPIs, Verlaufsgraphen für **1h · 3h · 24h · 3d · 14d** (CPU, Temperaturen inkl. aller Sensoren, RAM/Disk, Load, GPU, alle CPU-Kerne, Erreichbarkeit), aktuelle Kern-Auslastung, GPU-Details, systemd-Dienste mit 24h-Verfügbarkeit, Ereignisprotokoll (Offline/Online, Dienstausfälle) |
 | **Node-Verwaltung** | Server hinzufügen/bearbeiten/löschen mit **Name, IP/Hostname, API-Schlüssel**. Sofortiger Verbindungstest (Pairing) beim Speichern, „Jetzt abfragen“ |
+| **Docker-Inventar (Multi-Host)** | Alle Docker-Container über **alle** gekoppelten Docker-Hosts hinweg in einer Liste – unabhängig davon, auf welchem Host sie laufen. Linke Navigation ist umschaltbar zwischen **Host-** und **Container-Ansicht** (vSphere/Proxmox-Prinzip). Detailansicht mit Live-Auslastung, Ports/Mounts/Netzwerke/Labels sowie **Host-Zuordnung rechts**; Start/Stop/Neustart direkt aus dem Board |
 | **Collector** | PHP-CLI-Daemon im eigenen Container, pollt alle Nodes im Intervall (`COLLECTOR_INTERVAL`, Standard 60 s), Sofort-Retry bei Netzwerkfehlern, Offline erst nach 2 Fehlversuchen in Folge, stündliche Verdichtung in 10-Minuten-Buckets und Retention |
 | **Sicherheit** | Passwort-Login (bcrypt), Session + CSRF-Token, Brute-Force-Sperre, API-Keys der Nodes **AES-256-GCM-verschlüsselt** in der DB (Schlüssel aus `APP_SECRET`), strikte CSP, einzige PHP-Datei im Webroot |
 
@@ -92,6 +93,35 @@ Verlaufsgraphen füllen sich mit der Zeit aus der lokalen Historie des Boards.
 
 ---
 
+## Docker-Inventar (Multi-Host Container-Ansicht)
+
+Ist mehr als ein Docker-Host (quickinfo-Node mit Docker) gekoppelt, zeigt das Board alle Container
+**unabhängig vom Host** gebündelt an. Das Verhalten ist an vSphere bzw. Proxmox VE angelehnt:
+
+- **Linke Navigation umschaltbar:** Der Umschalter oben in der Sidebar wechselt zwischen der
+  **Host-Ansicht** (klassisches Server-Grid) und der **Container-Ansicht** (Docker-Inventar).
+  Die gewählte Ansicht wird in `localStorage` gespeichert.
+- **Container-Ansicht:** Tabelle aller Container über alle Hosts mit Name, Image, Status, **Host**
+  (verlinkt zur jeweiligen Node) und Ports. Kopfkarten zeigen Docker-Hosts, Container, laufende und
+  gestoppte Container als Summen.
+- **Detailansicht:** Live-Auslastung (CPU, RAM, Netzwerk-/Block-I/O, PIDs), Inspektionsdaten
+  (Befehl, Restart-Policy, Compose-Projekt/-Service, Notiz), Ports, Mounts, Netzwerke und Labels.
+  Die **Host-Information (rechts)** zeigt Name, Hostname, URL und Online-Status des betreibenden
+  Servers. Über die Aktionsleiste lässt sich der Container **starten, stoppen oder neu starten**.
+
+Die Container-Daten holt der Collector bei jedem Durchlauf von der jeweiligen Node ab und legt sie
+in der Tabelle `node_containers` als Cache ab. Detail, Statistiken und Aktionen werden dagegen **live**
+bei Bedarf abgefragt.
+
+> **Voraussetzung:** Die gekoppelte quickinfo-Instanz muss die Docker-Endpunkte unter
+> `/api/v1/docker/*` (Bearer) bereitstellen. Das Board ruft `GET /api/v1/docker/containers`,
+> `GET /api/v1/docker/containers/{name}`, `GET /api/v1/docker/containers/{name}/stats` und
+> `POST /api/v1/docker/containers/{name}/{start|stop|restart}` auf.
+
+Weitere Details und Screenshots: [docs/DOCKER-MULTI-HOST.md](docs/DOCKER-MULTI-HOST.md).
+
+---
+
 ## Konfiguration (`.env`)
 
 | Variable | Standard | Beschreibung |
@@ -114,6 +144,7 @@ Verlaufsgraphen füllen sich mit der Zeit aus der lokalen Historie des Boards.
 ```
 docker-compose.yml            Nginx + PHP-FPM + Collector + MariaDB
 .env.example                  Konfigurationsvorlage
+docs/                         Dokumentation (u. a. Multi-Host Docker-Ansicht mit Screenshots)
 docker/
   nginx/default.conf          Webserver-Konfiguration (CSP, FastCGI, SPA-Fallback)
   php/Dockerfile, php.ini     PHP 8.3 FPM (Alpine) mit pdo_mysql
@@ -131,6 +162,7 @@ app/
     quickinfo_client.php      HTTP-Client für /api/v1/*
     auth.php                  Login, Session, CSRF, Brute-Force-Schutz
     nodes.php                 Node-CRUD, Verbindungstest, Ausgabeformat
+    docker.php                Docker-Aggregation (Container-Liste, Detail, Aktionen)
     collector.php             Polling, Metrik-Extraktion, Ereignisse, Aggregation, Retention
     history.php               Zeitreihen (Rohdaten + Aggregate) für 1h…14d
     api.php                   REST-Endpunkte
@@ -149,6 +181,9 @@ app/
 | GET/PUT/DELETE | `/api/nodes/{id}` | Detail / bearbeiten / löschen |
 | POST | `/api/nodes/{id}/poll` | Node sofort abfragen |
 | GET | `/api/nodes/{id}/history?range=1h\|3h\|24h\|3d\|14d[&metrics=cpu.total,temp.max]` | Zeitreihen `{metric: [[ts, value], …]}` |
+| GET | `/api/containers` | Aggregierte Container aller Docker-Hosts (inkl. Host-Zuordnung, Summen) |
+| GET | `/api/containers/{node}/{id}` | Container-Detail (Host-Zuordnung, Live-Inspektion + Stats) |
+| POST | `/api/containers/{node}/{id}/{start\|stop\|restart}` | Container-Aktion auf der Node |
 
 Schreibende Anfragen benötigen den Header `X-CSRF-Token` (aus `/api/session`).
 
@@ -158,6 +193,9 @@ Schreibende Anfragen benötigen den Header `X-CSRF-Token` (aus `/api/session`).
   `mem.used_pct`, `disk.used_pct`, `load.1/5/15`, `gpu.N.util/temp/mem_pct/power`, `services.down`, `online`)
 - `node_metrics_agg`: 10-Minuten-Buckets (avg/min/max), stündlich vom Collector erzeugt
 - Zeiträume 1h/3h nutzen Rohdaten (60-s-Raster), 24h ein 5-Minuten-Raster, 3d/14d greifen auf die Aggregate zurück
+- `node_containers`: Docker-Container-Cache des Collectors (`node_id`, `container_id`, `name`, `image`,
+  `state`, `status`, `ports`, `updated_at`); Schlüssel ist `(node_id, container_id)` mit FK auf `nodes`
+  (`ON DELETE CASCADE`). Wird bei jedem Poll der Node aktualisiert; Detail/Stats/Aktionen werden live abgefragt.
 
 ## Troubleshooting
 

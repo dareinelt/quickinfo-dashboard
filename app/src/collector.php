@@ -46,7 +46,66 @@ function qb_collector_poll_node(array $node): array
     }
 
     qb_collector_store_result((int)$node['id'], $res['data'], $info, $now, $node);
+
+    // Docker-Host: Container der Node abrufen und cachen (falls das Docker-Modul aktiv ist)
+    try {
+        qb_collector_store_containers((int)$node['id'], $client, $now);
+    } catch (Throwable $e) {
+        qb_log(sprintf('Node #%d (%s): Docker-Container-Abruf fehlgeschlagen: %s', $node['id'], $node['name'], $e->getMessage()));
+    }
+
     return ['ok' => true, 'error' => null, 'ms' => $res['ms']];
+}
+
+/**
+ * Ruft /api/v1/docker/containers einer Node ab und hält den lokalen Cache
+ * (node_containers) aktuell. Ist Docker auf der Node nicht aktiviert, wird der
+ * Cache für diese Node geleert, damit keine veralteten Einträge bestehen bleiben.
+ */
+function qb_collector_store_containers(int $nodeId, QuickinfoClient $client, int $now): void
+{
+    $res = $client->dockerContainers();
+    $db = qb_db();
+
+    if (!$res['ok']) {
+        // Kein Docker-Host oder Modul deaktiviert: veraltete Einträge entfernen
+        $db->prepare('DELETE FROM node_containers WHERE node_id = ?')->execute([$nodeId]);
+        return;
+    }
+
+    $containers = $res['data']['containers'] ?? null;
+    if (!is_array($containers)) {
+        $db->prepare('DELETE FROM node_containers WHERE node_id = ?')->execute([$nodeId]);
+        return;
+    }
+
+    $db->beginTransaction();
+    try {
+        $db->prepare('DELETE FROM node_containers WHERE node_id = ?')->execute([$nodeId]);
+        $ins = $db->prepare(
+            'INSERT INTO node_containers (node_id, container_id, name, image, state, status, ports, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        foreach ($containers as $c) {
+            if (!is_array($c) || !isset($c['id'])) {
+                continue;
+            }
+            $ins->execute([
+                $nodeId,
+                substr((string)$c['id'], 0, 64),
+                substr((string)($c['name'] ?? $c['id']), 0, 255),
+                isset($c['image']) ? substr((string)$c['image'], 0, 255) : null,
+                isset($c['state']) ? substr((string)$c['state'], 0, 32) : null,
+                isset($c['status']) ? substr((string)$c['status'], 0, 255) : null,
+                isset($c['ports']) ? json_encode($c['ports'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null,
+                $now,
+            ]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        throw $e;
+    }
 }
 
 /**
