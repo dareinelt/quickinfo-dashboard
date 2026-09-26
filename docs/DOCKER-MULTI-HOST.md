@@ -37,6 +37,13 @@ Die Container-Ansicht zeigt **alle Container aller Hosts** in einer Tabelle:
 - **Ports** – formatiert aus den Docker-Port-Mappings (leer = `–`),
 - **Aktionen** – Sprung in die Detailansicht.
 
+Container lassen sich logisch in **benutzerdefinierte Ordner** sortieren. Jeder Ordner erscheint als
+eigene Gruppe inkl. Container-Anzahl; daneben gibt es immer den Bereich **„Nicht zugeordnet“**. Über
+die Schaltfläche **„Neuer Ordner“** wird ein Ordner angelegt, über die Icons am Ordnerkopf lässt er
+sich umbenennen oder löschen. Das Sortieren erfolgt per **Drag & Drop**: einen Container am Griff
+(⠿) aufnehmen und auf einen Ordner ziehen. Die Zuordnung wird serverseitig persistiert und überlebt
+Container-Neustarts sowie Collector-Polls.
+
 Die Kopfkarten fassen die Summen zusammen: Anzahl Docker-Hosts, Container, laufende und gestoppte
 Container.
 
@@ -81,9 +88,14 @@ flowchart LR
 
 | Methode | Pfad | Beschreibung |
 |---|---|---|
-| GET | `/api/containers` | Aggregierte Container aller Docker-Hosts (inkl. Host-Zuordnung, Summen) |
+| GET | `/api/containers` | Aggregierte Container aller Docker-Hosts (inkl. Host-Zuordnung, Summen, Ordner) |
 | GET | `/api/containers/{node}/{id}` | Container-Detail (Host-Zuordnung, Live-Inspektion + Stats) |
 | POST | `/api/containers/{node}/{id}/{start\|stop\|restart}` | Container-Aktion auf der Node |
+| GET | `/api/container-groups` | Liste der benutzerdefinierten Ordner (inkl. Container-Anzahl) |
+| POST | `/api/container-groups` | Ordner anlegen (Body: `{"name": "…"}`) |
+| PUT | `/api/container-groups/{id}` | Ordner umbenennen (Body: `{"name": "…"}`) |
+| DELETE | `/api/container-groups/{id}` | Ordner löschen (enthaltene Container werden freigegeben) |
+| POST | `/api/containers/{node}/{id}/group` | Container einem Ordner zuweisen (Body: `{"group_id": 1}` bzw. `null` zum Entfernen) |
 
 `{node}` ist die `nodes.id`, `{id}` die Docker-Container-ID. Die aggregierte Container-ID im Frontend
 ist `"{node}:{id}"`, die Route dementsprechend `#/container/{node}/{id}`.
@@ -102,6 +114,7 @@ Beispiel-Antwort von `GET /api/containers`:
       "state": "running",
       "status": "Up 3 days",
       "ports": [{"private": 80, "public": 8080, "type": "tcp", "ip": "0.0.0.0"}],
+      "group_id": 1,
       "host": {
         "id": 1,
         "name": "Host Alpha",
@@ -117,6 +130,14 @@ Beispiel-Antwort von `GET /api/containers`:
       "name": "Host Alpha",
       "container_count": 4,
       "running": 3
+    }
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "name": "Produktion",
+      "sort_order": 0,
+      "container_count": 2
     }
   ],
   "totals": {
@@ -144,3 +165,23 @@ Tabelle `node_containers`:
 | `updated_at` | INT UNSIGNED | Zeitstempel des letzten Poll |
 
 Primärschlüssel: `(node_id, container_id)`.
+
+Tabelle `container_groups` (benutzerdefinierte Ordner):
+
+| Spalte | Typ | Bedeutung |
+|---|---|---|
+| `id` | INT UNSIGNED | Primärschlüssel (AUTO_INCREMENT) |
+| `name` | VARCHAR(128) | Ordnername (eindeutig) |
+| `sort_order` | INT | Sortierung |
+| `created_at` | INT UNSIGNED | Zeitstempel |
+
+Tabelle `container_group_items` (Zuordnung Container → Ordner):
+
+| Spalte | Typ | Bedeutung |
+|---|---|---|
+| `node_id` | INT UNSIGNED | FK auf `nodes.id`, `ON DELETE CASCADE` |
+| `container_id` | VARCHAR(64) | Docker-Container-ID |
+| `group_id` | INT UNSIGNED | FK auf `container_groups.id`, `ON DELETE CASCADE` |
+
+Primärschlüssel: `(node_id, container_id)`. Die Zuordnung ist bewusst vom flüchtigen
+`node_containers`-Cache getrennt, damit sie Container-Neustarts und Collector-Polls überlebt.

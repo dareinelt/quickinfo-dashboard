@@ -109,6 +109,34 @@ function qb_schema_migrate(PDO $db): void
                 REFERENCES nodes (id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
     );
+
+    // Benutzerdefinierte Ordner zur logischen Gruppierung von Containern (unabhängig vom Host)
+    $db->exec(
+        'CREATE TABLE IF NOT EXISTS container_groups (
+            id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            name       VARCHAR(128) NOT NULL,
+            sort_order INT NOT NULL DEFAULT 0,
+            created_at INT UNSIGNED NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_container_groups_name (name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+    );
+
+    // Zuordnung Container → Ordner. Bewusst getrennt vom flüchtigen node_containers-Cache,
+    // damit die Zuordnung einen Container-Neustart/-Poll überlebt.
+    $db->exec(
+        'CREATE TABLE IF NOT EXISTS container_group_items (
+            node_id      INT UNSIGNED NOT NULL,
+            container_id VARCHAR(64)  NOT NULL,
+            group_id     INT UNSIGNED NOT NULL,
+            PRIMARY KEY (node_id, container_id),
+            KEY idx_container_group_items_group (group_id),
+            CONSTRAINT fk_container_group_items_node FOREIGN KEY (node_id)
+                REFERENCES nodes (id) ON DELETE CASCADE,
+            CONSTRAINT fk_container_group_items_group FOREIGN KEY (group_id)
+                REFERENCES container_groups (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+    );
 }
 
 function qb_meta_get(string $key, ?string $default = null): ?string

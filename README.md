@@ -20,7 +20,7 @@ sie lokal in MariaDB und visualisiert sie in einem Dark-Theme-Dashboard.
 | **Übersichts-Grid** | Kachel je Server: Online/Offline, Uptime, CPU, Temperatur, GPU bzw. RAM, freier Speicherplatz auf `/`, Dienststatus. Farbindikatoren Grün/Gelb/Rot bei Schwellenwerten (CPU ≥ 75/90 %, Temp ≥ 70/80 °C, Disk/RAM ≥ 80/90 %) |
 | **Detail-Ansicht** | KPIs, Verlaufsgraphen für **1h · 3h · 24h · 3d · 14d** (CPU, Temperaturen inkl. aller Sensoren, RAM/Disk, Load, GPU, alle CPU-Kerne, Erreichbarkeit), aktuelle Kern-Auslastung, GPU-Details, systemd-Dienste mit 24h-Verfügbarkeit, Ereignisprotokoll (Offline/Online, Dienstausfälle) |
 | **Node-Verwaltung** | Server hinzufügen/bearbeiten/löschen mit **Name, IP/Hostname, API-Schlüssel**. Sofortiger Verbindungstest (Pairing) beim Speichern, „Jetzt abfragen“ |
-| **Docker-Inventar (Multi-Host)** | Alle Docker-Container über **alle** gekoppelten Docker-Hosts hinweg in einer Liste – unabhängig davon, auf welchem Host sie laufen. Linke Navigation ist umschaltbar zwischen **Host-** und **Container-Ansicht** (vSphere/Proxmox-Prinzip). Detailansicht mit Live-Auslastung, Ports/Mounts/Netzwerke/Labels sowie **Host-Zuordnung rechts**; Start/Stop/Neustart direkt aus dem Board |
+| **Docker-Inventar (Multi-Host)** | Alle Docker-Container über **alle** gekoppelten Docker-Hosts hinweg in einer Liste – unabhängig davon, auf welchem Host sie laufen. Linke Navigation ist umschaltbar zwischen **Host-** und **Container-Ansicht** (vSphere/Proxmox-Prinzip). Container lassen sich in **benutzerdefinierte Ordner** sortieren (per **Drag & Drop**, Ordner anlegen/umbenennen/löschen). Detailansicht mit Live-Auslastung, Ports/Mounts/Netzwerke/Labels sowie **Host-Zuordnung rechts**; Start/Stop/Neustart direkt aus dem Board |
 | **Collector** | PHP-CLI-Daemon im eigenen Container, pollt alle Nodes im Intervall (`COLLECTOR_INTERVAL`, Standard 60 s), Sofort-Retry bei Netzwerkfehlern, Offline erst nach 2 Fehlversuchen in Folge, stündliche Verdichtung in 10-Minuten-Buckets und Retention |
 | **Sicherheit** | Passwort-Login (bcrypt), Session + CSRF-Token, Brute-Force-Sperre, API-Keys der Nodes **AES-256-GCM-verschlüsselt** in der DB (Schlüssel aus `APP_SECRET`), strikte CSP, einzige PHP-Datei im Webroot |
 
@@ -103,7 +103,11 @@ Ist mehr als ein Docker-Host (quickinfo-Node mit Docker) gekoppelt, zeigt das Bo
   Die gewählte Ansicht wird in `localStorage` gespeichert.
 - **Container-Ansicht:** Tabelle aller Container über alle Hosts mit Name, Image, Status, **Host**
   (verlinkt zur jeweiligen Node) und Ports. Kopfkarten zeigen Docker-Hosts, Container, laufende und
-  gestoppte Container als Summen.
+  gestoppte Container als Summen. Container lassen sich in **benutzerdefinierte Ordner** gruppieren:
+  Über **„Neuer Ordner“** werden Ordner angelegt (umbenennen/löschen über die Icons am Ordnerkopf),
+  per **Drag & Drop** (Griff ⠿) werden Container einem Ordner zugeordnet oder wieder in den Bereich
+  **„Nicht zugeordnet“** gezogen. Die Zuordnung wird in der Datenbank gespeichert und überlebt
+  Container-Neustarts sowie Collector-Polls.
 - **Detailansicht:** Live-Auslastung (CPU, RAM, Netzwerk-/Block-I/O, PIDs), Inspektionsdaten
   (Befehl, Restart-Policy, Compose-Projekt/-Service, Notiz), Ports, Mounts, Netzwerke und Labels.
   Die **Host-Information (rechts)** zeigt Name, Hostname, URL und Online-Status des betreibenden
@@ -162,7 +166,7 @@ app/
     quickinfo_client.php      HTTP-Client für /api/v1/*
     auth.php                  Login, Session, CSRF, Brute-Force-Schutz
     nodes.php                 Node-CRUD, Verbindungstest, Ausgabeformat
-    docker.php                Docker-Aggregation (Container-Liste, Detail, Aktionen)
+    docker.php                Docker-Aggregation (Container-Liste, Ordner, Detail, Aktionen)
     collector.php             Polling, Metrik-Extraktion, Ereignisse, Aggregation, Retention
     history.php               Zeitreihen (Rohdaten + Aggregate) für 1h…14d
     api.php                   REST-Endpunkte
@@ -181,9 +185,12 @@ app/
 | GET/PUT/DELETE | `/api/nodes/{id}` | Detail / bearbeiten / löschen |
 | POST | `/api/nodes/{id}/poll` | Node sofort abfragen |
 | GET | `/api/nodes/{id}/history?range=1h\|3h\|24h\|3d\|14d[&metrics=cpu.total,temp.max]` | Zeitreihen `{metric: [[ts, value], …]}` |
-| GET | `/api/containers` | Aggregierte Container aller Docker-Hosts (inkl. Host-Zuordnung, Summen) |
+| GET | `/api/containers` | Aggregierte Container aller Docker-Hosts (inkl. Host-Zuordnung, Summen, Ordner) |
 | GET | `/api/containers/{node}/{id}` | Container-Detail (Host-Zuordnung, Live-Inspektion + Stats) |
 | POST | `/api/containers/{node}/{id}/{start\|stop\|restart}` | Container-Aktion auf der Node |
+| GET/POST | `/api/container-groups` | Container-Ordner auflisten / anlegen |
+| PUT/DELETE | `/api/container-groups/{id}` | Container-Ordner umbenennen / löschen |
+| POST | `/api/containers/{node}/{id}/group` | Container einem Ordner zuweisen (`{"group_id": …}` bzw. `null`) |
 
 Schreibende Anfragen benötigen den Header `X-CSRF-Token` (aus `/api/session`).
 
@@ -196,6 +203,9 @@ Schreibende Anfragen benötigen den Header `X-CSRF-Token` (aus `/api/session`).
 - `node_containers`: Docker-Container-Cache des Collectors (`node_id`, `container_id`, `name`, `image`,
   `state`, `status`, `ports`, `updated_at`); Schlüssel ist `(node_id, container_id)` mit FK auf `nodes`
   (`ON DELETE CASCADE`). Wird bei jedem Poll der Node aktualisiert; Detail/Stats/Aktionen werden live abgefragt.
+- `container_groups` / `container_group_items`: benutzerdefinierte Container-Ordner und deren
+  Zuordnung (`(node_id, container_id)` → `group_id`, FK `ON DELETE CASCADE`). Bewusst getrennt vom
+  flüchtigen `node_containers`-Cache, damit die Sortierung Neustarts und Polls überlebt.
 
 ## Troubleshooting
 

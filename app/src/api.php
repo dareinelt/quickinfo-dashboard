@@ -92,6 +92,36 @@ function qb_api_dispatch(): never
             qb_require_auth();
             qb_json_response(qb_docker_containers_aggregate());
 
+        case $path === 'container-groups' && $method === 'GET':
+            qb_require_auth();
+            qb_json_response(['groups' => qb_container_groups_list()]);
+
+        case $path === 'container-groups' && $method === 'POST':
+            $in = qb_request_json();
+            $name = trim((string)($in['name'] ?? ''));
+            if ($name === '' || mb_strlen($name) > 128) {
+                qb_json_error('Bitte einen Ordnernamen (max. 128 Zeichen) angeben.', 422, ['field' => 'name']);
+            }
+            qb_json_response(['ok' => true, 'group' => qb_container_group_create($name)], 201);
+
+        case count($seg) === 2 && $seg[0] === 'container-groups' && ctype_digit($seg[1]) && $method === 'PUT':
+            $in = qb_request_json();
+            $name = trim((string)($in['name'] ?? ''));
+            if ($name === '' || mb_strlen($name) > 128) {
+                qb_json_error('Bitte einen Ordnernamen (max. 128 Zeichen) angeben.', 422, ['field' => 'name']);
+            }
+            qb_json_response(['ok' => true, 'group' => qb_container_group_rename((int)$seg[1], $name)]);
+
+        case count($seg) === 2 && $seg[0] === 'container-groups' && ctype_digit($seg[1]) && $method === 'DELETE':
+            qb_container_group_delete((int)$seg[1]);
+            qb_json_response(['ok' => true]);
+
+        case count($seg) === 4 && $seg[0] === 'containers' && ctype_digit($seg[1]) && $seg[2] !== '' && $seg[3] === 'group' && $method === 'POST':
+            $in = qb_request_json();
+            $groupId = (isset($in['group_id']) && $in['group_id'] !== null && $in['group_id'] !== '')
+                ? (int)$in['group_id'] : null;
+            qb_json_response(qb_container_group_assign((int)$seg[1], $seg[2], $groupId));
+
         case count($seg) === 3 && $seg[0] === 'containers' && ctype_digit($seg[1]) && $seg[2] !== '' && $method === 'GET':
             qb_require_auth();
             qb_json_response(qb_docker_container_detail((int)$seg[1], $seg[2]));
