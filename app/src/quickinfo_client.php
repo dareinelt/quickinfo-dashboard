@@ -93,6 +93,91 @@ final class QuickinfoClient
         return $this->get('info');
     }
 
+    /** Liste aller Docker-Container der Node (falls als Docker-Host konfiguriert). */
+    public function dockerContainers(): array
+    {
+        return $this->get('docker/containers');
+    }
+
+    /** Detailansicht (inspect) eines Containers. */
+    public function dockerContainer(string $name): array
+    {
+        return $this->get('docker/containers/' . rawurlencode($name));
+    }
+
+    /** Live-Auslastung eines Containers. */
+    public function dockerStats(string $name): array
+    {
+        return $this->get('docker/containers/' . rawurlencode($name) . '/stats');
+    }
+
+    /** Steuert einen Container (start|stop|restart). */
+    public function dockerAction(string $name, string $action): array
+    {
+        return $this->post('docker/containers/' . rawurlencode($name) . '/' . $action);
+    }
+
+    /**
+     * Führt eine POST-Anfrage gegen die quickinfo REST-API aus.
+     * @return array{ok:bool, status:int, data:?array, error:?string, ms:int}
+     */
+    public function post(string $endpoint): array
+    {
+        $url = rtrim($this->baseUrl, '/') . '/api/v1/' . ltrim($endpoint, '/');
+
+        $ctx = stream_context_create([
+            'http' => [
+                'method'          => 'POST',
+                'header'          => implode("\r\n", [
+                    'Authorization: Bearer ' . $this->apiKey,
+                    'Accept: application/json',
+                    'Content-Type: application/json',
+                    'User-Agent: quickinfo-board/' . QB_VERSION,
+                    'Connection: close',
+                ]),
+                'content'         => '{}',
+                'timeout'         => $this->timeout,
+                'ignore_errors'   => true,
+                'follow_location' => 0,
+            ],
+            'ssl' => [
+                'verify_peer'       => $this->verifyTls,
+                'verify_peer_name'  => $this->verifyTls,
+                'allow_self_signed' => !$this->verifyTls,
+            ],
+        ]);
+
+        $start = microtime(true);
+        $body = @file_get_contents($url, false, $ctx);
+        $ms = (int)round((microtime(true) - $start) * 1000);
+        $headers = $http_response_header ?? [];
+
+        if ($body === false) {
+            $err = error_get_last();
+            $msg = $err ? preg_replace('~^file_get_contents\([^)]*\): ~', '', (string)$err['message']) : 'Verbindung fehlgeschlagen';
+            return ['ok' => false, 'status' => 0, 'data' => null, 'error' => $this->humanizeError((string)$msg), 'ms' => $ms];
+        }
+
+        $status = 0;
+        if (isset($headers[0]) && preg_match('~HTTP/\S+\s+(\d{3})~', $headers[0], $m)) {
+            $status = (int)$m[1];
+        }
+
+        $data = json_decode($body, true);
+        if ($status === 401 || $status === 403) {
+            return ['ok' => false, 'status' => $status, 'data' => null,
+                'error' => 'API-Schlüssel ungültig (' . $status . ')' . (is_array($data) && isset($data['error']) ? ': ' . $data['error'] : ''), 'ms' => $ms];
+        }
+        if ($status < 200 || $status >= 300) {
+            $hint = is_array($data) && isset($data['error']) ? ': ' . $data['error'] : '';
+            return ['ok' => false, 'status' => $status, 'data' => $data, 'error' => 'HTTP ' . $status . $hint, 'ms' => $ms];
+        }
+        if (!is_array($data)) {
+            return ['ok' => false, 'status' => $status, 'data' => null, 'error' => 'Antwort ist kein gültiges JSON', 'ms' => $ms];
+        }
+        return ['ok' => true, 'status' => $status, 'data' => $data, 'error' => null, 'ms' => $ms];
+    }
+
     private function humanizeError(string $msg): string
     {
         $lower = strtolower($msg);

@@ -12,6 +12,7 @@
     renderToken: 0,
     charts: [],
     range: localStorage.getItem('qb.range') || '1h',
+    mode: localStorage.getItem('qb.mode') || 'host',
     lastOverview: null,
   };
 
@@ -47,6 +48,11 @@
     x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
     warn: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5l6 11H2z"/><path d="M8 7v3M8 12.2v.1"/></svg>',
     link: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9.5l3-3M7 4.5l1.2-1.2a2.5 2.5 0 0 1 3.5 3.5L10.5 8M9 11.5l-1.2 1.2a2.5 2.5 0 0 1-3.5-3.5L5.5 8"/></svg>',
+    server: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2.5" width="12" height="4.5" rx="1"/><rect x="2" y="9" width="12" height="4.5" rx="1"/><path d="M5 4.75h.01M5 11.25h.01"/></svg>',
+    cube: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8 1.8l5.8 3.4v5.6L8 14.2 2.2 10.8V5.2z"/><path d="M2.2 5.2L8 8.5l5.8-3.3M8 8.5v5.7"/></svg>',
+    play: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3l8 5-8 5z"/></svg>',
+    stop: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="8" height="8" rx="1"/></svg>',
+    restart: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>',
   };
   function icon(name) { const s = h('span', { class: 'ico', html: ICONS[name] }); s.style.display = 'inline-flex'; return s; }
 
@@ -136,11 +142,25 @@
     const parts = hash.split('/').filter(Boolean);
     if (parts[0] === 'node' && parts[1]) return { view: 'detail', id: parseInt(parts[1], 10) };
     if (parts[0] === 'nodes') return { view: 'nodes', id: null };
+    if (parts[0] === 'containers') return { view: 'containers', id: null };
+    if (parts[0] === 'container' && parts[1] && parts[2]) return { view: 'containerDetail', id: parts[1] + ':' + parts[2] };
     if (parts[0] === 'settings') return { view: 'settings', id: null };
     return { view: 'dashboard', id: null };
   }
   function navigate(hash) { location.hash = hash; }
-  window.addEventListener('hashchange', () => { state.route = parseRoute(); render(); });
+  function syncModeFromRoute() {
+    const v = state.route.view;
+    if (v === 'containers' || v === 'containerDetail') state.mode = 'container';
+    else if (v === 'dashboard' || v === 'detail' || v === 'nodes') state.mode = 'host';
+    localStorage.setItem('qb.mode', state.mode);
+  }
+  function setMode(mode) {
+    if (state.mode === mode) return;
+    state.mode = mode;
+    localStorage.setItem('qb.mode', mode);
+    navigate(mode === 'container' ? '#/containers' : '#/');
+  }
+  window.addEventListener('hashchange', () => { state.route = parseRoute(); syncModeFromRoute(); render(); });
 
   // ---------- Shell ----------
   function clearCharts() { for (const c of state.charts) c.destroy(); state.charts = []; }
@@ -155,17 +175,29 @@
 
   function shell(content, activeNav) {
     const user = state.session.user || {};
-    const nav = [['dashboard', '#/', 'Dashboard'], ['nodes', '#/nodes', 'Server'], ['settings', '#/settings', 'Einstellungen']];
+    const mode = state.mode;
+    const items = mode === 'container'
+      ? [['containers', '#/containers', 'Container']]
+      : [['dashboard', '#/', 'Übersicht'], ['nodes', '#/nodes', 'Server']];
+    items.push(['settings', '#/settings', 'Einstellungen']);
     return h('div', { class: 'app' },
-      h('header', { class: 'topbar' },
-        h('a', { class: 'brand', href: '#/' }, h('span', { html: ICONS.logo }), h('span', null, 'quickinfo', h('small', null, 'Board'))),
-        h('nav', { class: 'nav' }, nav.map(([id, href, label]) => h('a', { href, class: activeNav === id ? 'active' : '' }, label))),
-        h('div', { class: 'spacer' }),
-        h('span', { class: 'status-pill', id: 'collector-pill' }, h('span', { class: 'dot', style: { width: '7px', height: '7px', borderRadius: '50%', background: 'var(--text-muted)' } }), h('span', { class: 'text' }, 'Collector')),
-        h('span', { class: 'user' }, user.username || ''),
-        h('button', { class: 'btn ghost sm', onClick: logout }, 'Abmelden')
-      ),
-      h('main', { class: 'main' }, content)
+      h('div', { class: 'layout' },
+        h('aside', { class: 'sidebar' },
+          h('a', { class: 'brand', href: '#/' }, h('span', { html: ICONS.logo }), h('span', null, 'quickinfo', h('small', null, 'Board'))),
+          h('div', { class: 'view-toggle', role: 'tablist', 'aria-label': 'Ansicht' },
+            h('button', { role: 'tab', 'aria-selected': mode === 'host', class: mode === 'host' ? 'active' : '', onClick: () => setMode('host') }, icon('server'), h('span', null, 'Hosts')),
+            h('button', { role: 'tab', 'aria-selected': mode === 'container', class: mode === 'container' ? 'active' : '', onClick: () => setMode('container') }, icon('cube'), h('span', null, 'Container'))
+          ),
+          h('div', { class: 'nav-label' }, mode === 'container' ? 'Docker-Inventar' : 'Inventar'),
+          h('nav', { class: 'nav' }, items.map(([id, href, label]) => h('a', { href, class: activeNav === id ? 'active' : '' }, label))),
+          h('div', { class: 'spacer' }),
+          h('div', { class: 'sidebar-foot' },
+            h('span', { class: 'status-pill', id: 'collector-pill' }, h('span', { class: 'dot', style: { width: '7px', height: '7px', borderRadius: '50%', background: 'var(--text-muted)' } }), h('span', { class: 'text' }, 'Collector')),
+            h('div', { class: 'user-row' }, h('span', { class: 'user' }, user.username || ''), h('button', { class: 'btn ghost sm', onClick: logout }, 'Abmelden'))
+          )
+        ),
+        h('main', { class: 'main' }, content)
+      )
     );
   }
   function updateCollectorPill(alive) {
@@ -183,6 +215,8 @@
     switch (state.route.view) {
       case 'detail': renderDetail(state.route.id); break;
       case 'nodes': renderNodes(); break;
+      case 'containers': renderContainers(); break;
+      case 'containerDetail': renderContainerDetail(state.route.id); break;
       case 'settings': renderSettings(); break;
       default: renderDashboard();
     }
@@ -692,6 +726,241 @@
     setTimeout(() => f.name.focus(), 0);
   }
 
+  // ---------- Container-Ansicht (Docker) ----------
+  const CONTAINER_STATE = {
+    running: { label: 'Läuft', cls: 'online' },
+    exited: { label: 'Beendet', cls: 'offline' },
+    paused: { label: 'Pausiert', cls: 'unknown' },
+    created: { label: 'Erstellt', cls: 'unknown' },
+    restarting: { label: 'Neustart', cls: 'warn' },
+    dead: { label: 'Tot', cls: 'offline' },
+    removing: { label: 'Wird entfernt', cls: 'unknown' },
+  };
+  function containerStateInfo(state) {
+    return CONTAINER_STATE[state] || { label: state || '–', cls: 'unknown' };
+  }
+  function formatPorts(p) {
+    if (!p) return '–';
+    if (Array.isArray(p)) {
+      return p.map(x => ((x.host_ip && x.host_ip !== '0.0.0.0') ? x.host_ip + ':' : '') + (x.host_port || x.container || '')).filter(Boolean).join(', ') || '–';
+    }
+    return String(p);
+  }
+  function fmtDockerTs(ts) {
+    if (!ts) return '–';
+    const m = String(ts).match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+    return m ? m[1].replace('T', ' ') + ' UTC' : String(ts);
+  }
+
+  async function renderContainers() {
+    const token = state.renderToken;
+    const totalsEl = h('div', { class: 'totals' });
+    const tableEl = h('div', { class: 'card' });
+    const refreshInfo = h('span', { class: 'refresh-info' }, h('i', { class: 'dot' }), 'lädt …');
+    const content = h('div', null,
+      h('div', { class: 'page-head' },
+        h('div', null, h('h1', null, 'Container'), h('div', { class: 'sub' }, 'Alle Docker-Container über alle Hosts hinweg')),
+        h('div', { class: 'actions' }, refreshInfo)
+      ),
+      totalsEl, tableEl
+    );
+    mount(shell(content, 'containers'));
+
+    async function load() {
+      let d;
+      try { d = await api('GET', 'containers'); }
+      catch (e) { if (e.status !== 401) tableEl.replaceChildren(h('p', { class: 'crit' }, e.message)); return; }
+      const t = d.totals || {};
+      totalsEl.replaceChildren(
+        h('div', { class: 'total' }, h('span', { class: 'label' }, 'Docker-Hosts'), h('span', { class: 'value num' }, t.hosts)),
+        h('div', { class: 'total' }, h('span', { class: 'label' }, 'Container'), h('span', { class: 'value num' }, t.containers)),
+        h('div', { class: 'total' }, h('span', { class: 'label' }, 'Laufend'), h('span', { class: 'value num ok' }, t.running)),
+        h('div', { class: 'total' }, h('span', { class: 'label' }, 'Gestoppt'), h('span', { class: 'value num ' + (t.stopped > 0 ? 'warn' : '') }, t.stopped))
+      );
+      if (!d.containers.length) {
+        tableEl.replaceChildren(h('div', { class: 'empty' },
+          h('h3', null, 'Keine Container gefunden'),
+          h('p', null, 'Auf keiner verbundenen quickinfo-Instanz ist das Docker-Modul aktiv, oder es laufen keine Container. Aktiviere Docker in quickinfo (Einstellungen → Docker) und koppele den Host als Server.')));
+        return;
+      }
+      tableEl.replaceChildren(h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+        h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Image'), h('th', null, 'Status'), h('th', null, 'Host'), h('th', null, 'Ports'), h('th', { class: 'right' }, 'Aktionen'))),
+        h('tbody', null, d.containers.map(c => {
+          const si = containerStateInfo(c.state);
+          const host = c.host || {};
+          return h('tr', { class: 'clickable', onClick: (e) => { if (!e.target.closest('button, a')) navigate('#/container/' + c.node_id + '/' + c.container_id); } },
+            h('td', null, h('b', null, c.name)),
+            h('td', { class: 'mono dim' }, c.image || '–'),
+            h('td', null, h('span', { class: 'status ' + si.cls }, h('i', { class: 'dot' }), si.label), c.status ? h('span', { class: 'muted', style: { fontSize: '11.5px', marginLeft: '6px' } }, c.status) : null),
+            h('td', null, h('a', { href: '#/node/' + host.id, class: 'dim' }, host.name || host.hostname || ('Host ' + host.id))),
+            h('td', { class: 'mono dim' }, formatPorts(c.ports)),
+            h('td', null, h('div', { class: 'actions' }, h('button', { class: 'btn sm', title: 'Details', onClick: () => navigate('#/container/' + c.node_id + '/' + c.container_id) }, 'Details')))
+          );
+        }))
+      )));
+      refreshInfo.className = 'refresh-info';
+      refreshInfo.replaceChildren(h('i', { class: 'dot' }), 'Aktualisiert ' + new Date().toLocaleTimeString('de-DE'));
+    }
+    await load();
+    startRefresh(load, token);
+  }
+
+  async function renderContainerDetail(id) {
+    const token = state.renderToken;
+    const sep = id.indexOf(':');
+    const nodeId = id.slice(0, sep);
+    const containerId = id.slice(sep + 1);
+    const headEl = h('div', { class: 'detail-head' });
+    const bodyEl = h('div', null);
+    const content = h('div', null, headEl, bodyEl);
+    mount(shell(content, 'containers'));
+
+    let d = null;
+
+    function hostPanel() {
+      const host = d.host || {};
+      return h('aside', { class: 'host-panel' },
+        h('h3', null, 'Host'),
+        h('div', { class: 'host-card' },
+          h('a', { class: 'host-name', href: '#/node/' + host.id }, host.name || host.hostname || ('Node ' + host.id)),
+          h('div', { class: 'host-meta' },
+            h('span', null, 'Hostname ', h('b', null, host.hostname || '–')),
+            h('span', null, 'URL ', h('b', { class: 'mono' }, host.url || '–'))
+          ),
+          h('span', { class: 'status ' + (host.status || 'unknown') }, h('i', { class: 'dot' }), STATUS_LABEL[host.status] || host.status)
+        )
+      );
+    }
+
+    function renderHead() {
+      const si = containerStateInfo(d.state);
+      const refreshBtn = h('button', { class: 'btn', onClick: async () => {
+        refreshBtn.disabled = true; refreshBtn.replaceChildren(h('span', { class: 'spinner' }), 'Lädt …');
+        try { await load(); }
+        catch (e) { toast(e.message, 'crit'); }
+        finally { refreshBtn.disabled = false; refreshBtn.replaceChildren(icon('refresh'), 'Aktualisieren'); }
+      } }, icon('refresh'), 'Aktualisieren');
+
+      const actBtn = (act, label, icn, cls) => {
+        const b = h('button', { class: 'btn ' + (cls || ''), onClick: async () => {
+          b.disabled = true;
+          try {
+            const r = await api('POST', 'containers/' + nodeId + '/' + containerId + '/' + act);
+            toast(r.ok ? 'Container ' + label.toLowerCase() : 'Aktion fehlgeschlagen: ' + r.error, r.ok ? 'ok' : 'crit');
+            if (r.ok) await load();
+          } catch (e) { toast(e.message, 'crit'); }
+          finally { b.disabled = false; }
+        } }, icon(icn), label);
+        return b;
+      };
+
+      headEl.replaceChildren(
+        h('div', { style: { flex: 1, minWidth: 0 } },
+          h('a', { class: 'back', href: '#/containers' }, icon('back'), 'Zur Container-Übersicht'),
+          h('h1', null, d.name || ('Container ' + containerId), h('span', { class: 'status ' + si.cls }, h('i', { class: 'dot' }), si.label)),
+          h('div', { class: 'meta' },
+            h('span', null, 'Host ', h('a', { href: '#/node/' + (d.host && d.host.id) }, h('b', null, (d.host && d.host.name) || '–'))),
+            h('span', null, 'Image ', h('b', { class: 'mono' }, d.image || '–')),
+            d.status ? h('span', null, 'Status ', h('b', null, d.status)) : null
+          )
+        ),
+        h('div', { class: 'actions', style: { display: 'flex', gap: '8px', alignItems: 'flex-start' } },
+          refreshBtn,
+          actBtn('start', 'Start', 'play'),
+          actBtn('stop', 'Stop', 'stop', 'danger'),
+          actBtn('restart', 'Neustart', 'restart')
+        )
+      );
+    }
+
+    function renderBody() {
+      const detail = d.detail || {};
+      const stats = d.stats || {};
+      const statKpis = h('div', { class: 'kpis' },
+        kpi('CPU', stats.cpu || '–', null, 'Docker-Auslastung'),
+        kpi('RAM', stats.memory || '–', null, stats.memory_percent || ''),
+        kpi('Netzwerk I/O', stats.network_io || '–'),
+        kpi('Block I/O', stats.block_io || '–'),
+        kpi('PIDs', stats.pids || '–')
+      );
+
+      const infoCard = h('div', { class: 'card' }, h('h3', null, 'Container'),
+        h('dl', { class: 'kv' },
+          h('dt', null, 'Image'), h('dd', { class: 'mono' }, detail.image || d.image || '–'),
+          h('dt', null, 'Befehl'), h('dd', { class: 'mono' }, detail.command || '–'),
+          h('dt', null, 'Erstellt'), h('dd', null, fmtDockerTs(detail.created)),
+          h('dt', null, 'Status'), h('dd', null, detail.status || d.status || '–'),
+          h('dt', null, 'Restart-Policy'), h('dd', null, detail.restart_policy || '–'),
+          h('dt', null, 'Compose-Projekt'), h('dd', null, detail.compose_project || '–'),
+          h('dt', null, 'Compose-Service'), h('dd', null, detail.compose_service || '–'),
+          h('dt', null, 'Notiz'), h('dd', null, detail.note || '–')
+        ));
+
+      const ports = Array.isArray(detail.ports) ? detail.ports : [];
+      const portsCard = h('div', { class: 'card' }, h('h3', null, 'Ports'),
+        ports.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+          h('thead', null, h('tr', null, h('th', null, 'Container'), h('th', null, 'Host-Port'), h('th', null, 'Host-IP'))),
+          h('tbody', null, ports.map(p => h('tr', null,
+            h('td', { class: 'mono' }, p.container || '–'),
+            h('td', { class: 'mono' }, p.host_port || '–'),
+            h('td', { class: 'mono dim' }, p.host_ip || '–')
+          )))
+        )) : h('p', { class: 'muted' }, 'Keine Port-Weiterleitungen.'));
+
+      const mounts = Array.isArray(detail.mounts) ? detail.mounts : [];
+      const mountsCard = h('div', { class: 'card' }, h('h3', null, 'Mounts'),
+        mounts.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+          h('thead', null, h('tr', null, h('th', null, 'Typ'), h('th', null, 'Quelle'), h('th', null, 'Ziel'), h('th', { class: 'right' }, 'RW'))),
+          h('tbody', null, mounts.map(m => h('tr', null,
+            h('td', { class: 'dim' }, m.type || '–'),
+            h('td', { class: 'mono' }, m.source || m.name || '–'),
+            h('td', { class: 'mono' }, m.destination || '–'),
+            h('td', { class: 'right' }, m.rw ? 'ja' : 'nein')
+          )))
+        )) : h('p', { class: 'muted' }, 'Keine Mounts.'));
+
+      const networks = Array.isArray(detail.networks) ? detail.networks : [];
+      const networksCard = h('div', { class: 'card' }, h('h3', null, 'Netzwerke'),
+        networks.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+          h('thead', null, h('tr', null, h('th', null, 'Netzwerk'), h('th', null, 'IP'), h('th', null, 'Gateway'), h('th', null, 'MAC'))),
+          h('tbody', null, networks.map(n => h('tr', null,
+            h('td', null, h('b', null, n.name || '–')),
+            h('td', { class: 'mono' }, n.ip || '–'),
+            h('td', { class: 'mono' }, n.gateway || '–'),
+            h('td', { class: 'mono dim' }, n.mac || '–')
+          )))
+        )) : h('p', { class: 'muted' }, 'Keine Netzwerke.'));
+
+      const labels = detail.labels && typeof detail.labels === 'object' ? detail.labels : {};
+      const labelKeys = Object.keys(labels);
+      const labelsCard = h('div', { class: 'card' }, h('h3', null, 'Labels'),
+        labelKeys.length ? h('dl', { class: 'kv' }, labelKeys.map(k => [h('dt', { class: 'mono' }, k), h('dd', { class: 'mono dim' }, String(labels[k]))]).flat())
+        : h('p', { class: 'muted' }, 'Keine Labels.'));
+
+      bodyEl.replaceChildren(
+        statKpis,
+        h('div', { class: 'container-layout' },
+          h('div', { class: 'container-main' }, infoCard, portsCard, mountsCard, networksCard, labelsCard),
+          hostPanel()
+        )
+      );
+    }
+
+    async function load() {
+      d = await api('GET', 'containers/' + nodeId + '/' + containerId);
+      renderHead();
+      renderBody();
+    }
+
+    try { await load(); }
+    catch (e) {
+      if (e.status === 401) return;
+      headEl.replaceChildren(h('div', null, h('a', { class: 'back', href: '#/containers' }, icon('back'), 'Zur Container-Übersicht'), h('h1', null, 'Container nicht gefunden')));
+      bodyEl.replaceChildren(h('p', { class: 'crit' }, e.message));
+      return;
+    }
+  }
+
   // ---------- Einstellungen ----------
   function renderSettings() {
     const cur = h('input', { class: 'input', type: 'password', autocomplete: 'current-password', required: true });
@@ -744,6 +1013,7 @@
 
   (async function init() {
     state.route = parseRoute();
+    syncModeFromRoute();
     await loadSession();
     render();
   })();
